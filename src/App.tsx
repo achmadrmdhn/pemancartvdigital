@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapView } from './components/MapView'
 import './App.css'
-import type { Transmitter, UserLocation } from './types'
+import type { RankedTransmitter, Transmitter, UserLocation } from './types'
 import {
   calculateBearing,
   calculateDistanceKm,
@@ -38,7 +38,7 @@ function App() {
 
   const isOrientationSupported = typeof window !== 'undefined' && Boolean(window.DeviceOrientationEvent)
   const showInitialState = locationStatus === 'idle'
-  const showLoadingState = locationStatus === 'loading'
+  const showLoadingState = locationStatus === 'loading' || searchStatus === 'loading'
 
   const requestLocation = async () => {
     if (!navigator.geolocation) {
@@ -83,7 +83,6 @@ function App() {
 
           setSearchStatus('success')
           setSearchMessage(null)
-          setSelectedTransmitterId(results[0].id)
         } catch {
           setTransmitters([])
           setSearchStatus('error')
@@ -112,7 +111,7 @@ function App() {
     )
   }
 
-  const rankedTransmitters = useMemo(() => {
+  const rankedTransmitters = useMemo<RankedTransmitter[]>(() => {
     if (!location || transmitters.length === 0) {
       return []
     }
@@ -127,6 +126,18 @@ function App() {
       .sort((left, right) => left.distanceKm - right.distanceKm)
   }, [location, transmitters])
 
+  useEffect(() => {
+    if (rankedTransmitters.length === 0) {
+      setSelectedTransmitterId(null)
+      return
+    }
+
+    const hasSelected = rankedTransmitters.some((item) => item.transmitter.id === selectedTransmitterId)
+    if (!hasSelected) {
+      setSelectedTransmitterId(rankedTransmitters[0].transmitter.id)
+    }
+  }, [rankedTransmitters, selectedTransmitterId])
+
   const activeTarget = useMemo(() => {
     if (rankedTransmitters.length === 0) {
       return null
@@ -140,7 +151,7 @@ function App() {
   }, [rankedTransmitters, selectedTransmitterId])
 
   const alternatives = useMemo(
-    () => rankedTransmitters.filter((item) => item.transmitter.id !== activeTarget?.transmitter.id).slice(0, 3),
+    () => rankedTransmitters.filter((item) => item.transmitter.id !== activeTarget?.transmitter.id),
     [rankedTransmitters, activeTarget],
   )
 
@@ -262,8 +273,16 @@ function App() {
         {showLoadingState && (
           <section className="state-loading">
             <div className="spinner" aria-hidden="true" />
-            <p className="loading-title">Mencari sinyal GPS...</p>
-            <p className="loading-subtitle">Izinkan akses lokasi pada peramban Anda</p>
+            <p className="loading-title">
+              {locationStatus === 'loading'
+                ? 'Mencari sinyal GPS...'
+                : 'Mencari pemancar TV digital terdekat...'}
+            </p>
+            <p className="loading-subtitle">
+              {locationStatus === 'loading'
+                ? 'Izinkan akses lokasi pada peramban Anda'
+                : 'Mencari koordinat menara transmisi dari database & satelit online'}
+            </p>
           </section>
         )}
 
@@ -328,15 +347,17 @@ function App() {
               </div>
               <MapView
                 userLocation={location}
-                transmitter={activeTarget?.transmitter ?? null}
-                distanceKm={activeTarget?.distanceKm ?? null}
-                bearing={activeTarget?.bearing ?? null}
+                rankedTransmitters={rankedTransmitters}
+                selectedTransmitterId={selectedTransmitterId}
+                onSelectTransmitter={(transmitterId) => setSelectedTransmitterId(transmitterId)}
               />
             </article>
 
             <article className="panel">
               <h3>Pemancar Lain di Sekitar Anda</h3>
-              {alternatives.length === 0 && <p className="subtle">Belum ada pemancar alternatif di hasil pencarian.</p>}
+              {alternatives.length === 0 && (
+                <p className="subtle">Belum ada pemancar alternatif di hasil pencarian.</p>
+              )}
               <div className="alt-list">
                 {alternatives.map((item) => (
                   <button

@@ -1,14 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import type { LatLngExpression } from 'leaflet'
-import type { Transmitter, UserLocation } from '../types'
+import type { RankedTransmitter, UserLocation } from '../types'
 
 interface MapViewProps {
   userLocation: UserLocation | null
-  transmitter: Transmitter | null
-  distanceKm: number | null
-  bearing: number | null
+  rankedTransmitters: RankedTransmitter[]
+  selectedTransmitterId: number | null
+  onSelectTransmitter: (transmitterId: number) => void
 }
 
 const userIcon = L.divIcon({
@@ -17,39 +17,56 @@ const userIcon = L.divIcon({
   iconSize: [20, 20],
 })
 
-const transmitterIcon = L.divIcon({
-  html: '<span class="map-marker transmitter-marker">📡</span>',
-  className: 'marker-bubble',
-  iconSize: [32, 32],
-})
+function createTransmitterIcon(isSelected: boolean) {
+  return L.divIcon({
+    html: `<span class="map-marker transmitter-marker ${isSelected ? 'selected' : ''}">📡</span>`,
+    className: 'marker-bubble',
+    iconSize: [32, 32],
+  })
+}
 
-function MapViewport({ userLocation, transmitter }: Pick<MapViewProps, 'userLocation' | 'transmitter'>) {
+function MapViewport({
+  userLocation,
+  rankedTransmitters,
+}: Pick<MapViewProps, 'userLocation' | 'rankedTransmitters'>) {
   const map = useMap()
+  const boundsKey = useMemo(
+    () => rankedTransmitters.map((item) => item.transmitter.id).join(':'),
+    [rankedTransmitters],
+  )
 
   useEffect(() => {
-    if (userLocation && transmitter) {
-      const bounds = L.latLngBounds(
-        [userLocation.latitude, userLocation.longitude],
-        [transmitter.latitude, transmitter.longitude],
-      )
-      map.fitBounds(bounds, { padding: [40, 40] })
+    if (!userLocation) {
       return
     }
 
-    if (userLocation) {
+    if (rankedTransmitters.length === 0) {
       map.setView([userLocation.latitude, userLocation.longitude], 12)
+      return
     }
-  }, [map, transmitter, userLocation])
+
+    const points: LatLngExpression[] = [
+      [userLocation.latitude, userLocation.longitude],
+      ...rankedTransmitters.map((item) => [item.transmitter.latitude, item.transmitter.longitude] as LatLngExpression),
+    ]
+    const bounds = L.latLngBounds(points as [number, number][])
+    map.fitBounds(bounds, { padding: [40, 40] })
+  }, [map, userLocation, boundsKey, rankedTransmitters])
 
   return null
 }
 
-export function MapView({ userLocation, transmitter, distanceKm, bearing }: MapViewProps) {
+export function MapView({
+  userLocation,
+  rankedTransmitters,
+  selectedTransmitterId,
+  onSelectTransmitter,
+}: MapViewProps) {
   const center: LatLngExpression = userLocation
     ? [userLocation.latitude, userLocation.longitude]
     : [-6.595, 106.816]
 
-  if (!userLocation || !transmitter) {
+  if (!userLocation) {
     return (
       <div className="map-placeholder">
         <p>Menunggu lokasi Anda agar peta bisa ditampilkan.</p>
@@ -57,34 +74,52 @@ export function MapView({ userLocation, transmitter, distanceKm, bearing }: MapV
     )
   }
 
-  const route: LatLngExpression[] = [
-    [userLocation.latitude, userLocation.longitude],
-    [transmitter.latitude, transmitter.longitude],
-  ]
+  const activeTarget =
+    rankedTransmitters.find((item) => item.transmitter.id === selectedTransmitterId) ?? rankedTransmitters[0] ?? null
+
+  const route: LatLngExpression[] | null = activeTarget
+    ? [
+        [userLocation.latitude, userLocation.longitude],
+        [activeTarget.transmitter.latitude, activeTarget.transmitter.longitude],
+      ]
+    : null
 
   return (
     <div className="map-wrap">
-      <MapContainer center={center} zoom={11} scrollWheelZoom={false} className="map-container">
+      <MapContainer center={center} zoom={11} scrollWheelZoom className="map-container">
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <MapViewport userLocation={userLocation} transmitter={transmitter} />
+        <MapViewport userLocation={userLocation} rankedTransmitters={rankedTransmitters} />
+
         <Marker position={[userLocation.latitude, userLocation.longitude]} icon={userIcon}>
           <Popup>Posisi Anda</Popup>
         </Marker>
-        <Marker position={[transmitter.latitude, transmitter.longitude]} icon={transmitterIcon}>
-          <Popup>
-            <strong>{transmitter.name}</strong>
-            {distanceKm !== null && bearing !== null && (
-              <>
+
+        {rankedTransmitters.map((item) => {
+          const isSelected = item.transmitter.id === activeTarget?.transmitter.id
+          return (
+            <Marker
+              key={item.transmitter.id}
+              position={[item.transmitter.latitude, item.transmitter.longitude]}
+              icon={createTransmitterIcon(isSelected)}
+              eventHandlers={{
+                click: () => onSelectTransmitter(item.transmitter.id),
+              }}
+            >
+              <Popup>
+                <strong>{item.transmitter.name}</strong>
                 <br />
-                {distanceKm.toFixed(1)} km ({Math.round(bearing)}°)
-              </>
-            )}
-          </Popup>
-        </Marker>
-        <Polyline positions={route} pathOptions={{ color: '#2563eb', weight: 3, dashArray: '6 8', opacity: 0.85 }} />
+                {item.distanceKm.toFixed(1)} km ({Math.round(item.bearing)}°)
+                <br />
+                Klik marker untuk memilih pemancar ini.
+              </Popup>
+            </Marker>
+          )
+        })}
+
+        {route && <Polyline positions={route} pathOptions={{ color: '#2563eb', weight: 3, dashArray: '6 8', opacity: 0.85 }} />}
       </MapContainer>
     </div>
   )

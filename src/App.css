@@ -347,6 +347,24 @@
   border: 2px solid #fff;
   background: #0f172a;
   font-size: 0.9rem;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.transmitter-marker.selected {
+  background: #2563eb;
+  transform: scale(1.08);
+}
+
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+}
+
+.leaflet-control-zoom a {
+  border: none !important;
+  color: #334155 !important;
 }
 
 .alt-list {
@@ -397,7 +415,7 @@
   inset: 0;
   background: #0f172a;
   color: #fff;
-  z-index: 20;
+  z-index: 9999;
   display: flex;
   flex-direction: column;
   padding: 18px;
