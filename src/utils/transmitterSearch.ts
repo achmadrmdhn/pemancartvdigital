@@ -2,7 +2,7 @@ import type { Transmitter, UserLocation } from '../types'
 
 const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.org/search'
 const TRANSMITTER_NAME_PATTERN =
-  'pemancar|transmisi|transmitter|relay\\s?tv|menara\\s?tv|tv\\s?tower|television\\s?tower|stasiun\\s?tv|stasiun\\s?televisi|tvri|rcti|sctv|indosiar|metro\\s?tv|trans\\s?tv|trans7|mnc\\s?tv|antv|tvone|g\\s?tv|global\\s?tv'
+  'pemancar|transmisi|transmitter|relay|broadcast|siaran|digital|mux|tv|televisi|television|tvri|rcti|sctv|indosiar|metro|trans|antv|tvone|mnc|global|inews|rtv|net|kompas|btv|vtv|jtv|muxtv'
 
 interface OverpassElement {
   type: 'node' | 'way' | 'relation'
@@ -79,6 +79,13 @@ function getMapName(tags: Record<string, string | undefined>) {
 }
 
 function computeRelevanceScore(tags: Record<string, string | undefined>) {
+  // Strictly require the feature to be a physical tower/mast or have broadcast markers
+  const isTower = tags.man_made === 'tower' || tags.man_made === 'mast' || tags['tower:type']
+  const isBroadcast = tags.broadcast || tags['communication:television']
+  if (!isTower && !isBroadcast) {
+    return 0
+  }
+
   const textBlob = [
     tags.name,
     tags.operator,
@@ -137,13 +144,6 @@ function computeRelevanceScore(tags: Record<string, string | undefined>) {
     score -= 200
   }
 
-  // Reduce score for plain buildings or offices with no tower/broadcast markers
-  const isTower = tags.man_made === 'tower' || tags.man_made === 'mast' || tags['tower:type']
-  const isBroadcast = tags.broadcast || tags['communication:television']
-  if (!isTower && !isBroadcast && (tags.office || tags.building)) {
-    score -= 80
-  }
-
   return score
 }
 
@@ -153,15 +153,12 @@ async function queryOverpass(userLocation: UserLocation, radiusMeters: number) {
 (
   node["name"~"${TRANSMITTER_NAME_PATTERN}",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
   way["name"~"${TRANSMITTER_NAME_PATTERN}",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
-  relation["name"~"${TRANSMITTER_NAME_PATTERN}",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
 
   node["broadcast"~"tv|television|dvb|digital",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
   way["broadcast"~"tv|television|dvb|digital",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
-  relation["broadcast"~"tv|television|dvb|digital",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
 
   node["communication:television"~"yes|main|primary|transmitter|broadcast",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
   way["communication:television"~"yes|main|primary|transmitter|broadcast",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
-  relation["communication:television"~"yes|main|primary|transmitter|broadcast",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
 
   node["tower:type"~"broadcast|communication",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
   way["tower:type"~"broadcast|communication",i](around:${radiusMeters},${userLocation.latitude},${userLocation.longitude});
@@ -170,17 +167,18 @@ out center tags;
 `
 
   const endpoints = [
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.nchc.org.tw/api/interpreter',
     'https://overpass-api.de/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
     'https://z.overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
   ]
 
   let lastError: unknown = null
   for (const endpoint of endpoints) {
     try {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 6000)
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
       const response = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
         signal: controller.signal
       })
@@ -290,14 +288,16 @@ async function delay(ms: number) {
 
 async function fetchNominatimFallback(userLocation: UserLocation) {
   const keywords = [
+    'TVRI',
+    'RCTI',
+    'SCTV',
+    'Indosiar',
+    'stasiun transmisi',
     'pemancar tv',
-    'transmisi tv',
-    'tv transmitter',
-    'pemancar TVRI',
   ]
 
   const results: NominatimItem[] = []
-  
+
   for (const keyword of keywords) {
     try {
       const items = await queryNominatimByKeyword(userLocation, keyword)
@@ -313,69 +313,85 @@ async function fetchNominatimFallback(userLocation: UserLocation) {
     if (results.length >= 50) {
       break
     }
-    
+
     // Respect Nominatim's strict rate limit policy (max 1 request per second)
     await delay(1100)
   }
 
+  const VALID_TRANSMITTER_NAME_REGEX = /pemancar|transmisi|transmitter|relay|siaran|digital|mux|tv|televisi|television|tvri|rcti|sctv|indosiar|metro|trans|antv|tvone|mnc|global|inews|rtv|net|kompas|btv|vtv|jtv/i
+
   const mapped: Array<Transmitter | null> = results.map((item) => {
-      const latitude = Number(item.lat)
-      const longitude = Number(item.lon)
-      const name = getMapNameFromDisplay(item.display_name)
+    const latitude = Number(item.lat)
+    const longitude = Number(item.lon)
+    const name = getMapNameFromDisplay(item.display_name)
 
-      if (!name || Number.isNaN(latitude) || Number.isNaN(longitude)) {
-        return null
-      }
+    if (!name || Number.isNaN(latitude) || Number.isNaN(longitude)) {
+      return null
+    }
 
-      const category = (item.class ?? item.category ?? '').toLowerCase()
-      const type = (item.type ?? '').toLowerCase()
+    // Exclude known corporate office towers or non-transmitters
+    if (/tower/i.test(name)) {
+      return null
+    }
 
-      // Filter out roads, bus stops, boundaries, waterways, natural features
-      if (['highway', 'boundary', 'place', 'waterway', 'natural'].includes(category)) {
-        return null
-      }
-      if (['bus_stop', 'bus_station', 'railway_station', 'platform'].includes(type)) {
-        return null
-      }
+    if (!VALID_TRANSMITTER_NAME_REGEX.test(name)) {
+      return null
+    }
 
-      const candidate: Transmitter = {
-        id: stringToId(`nominatim:${item.place_id}:${name}:${latitude}:${longitude}`),
-        name,
-        latitude,
-        longitude,
-        relevanceScore: computeNominatimRelevance(item),
-      }
+    const category = (item.class ?? item.category ?? '').toLowerCase()
+    const type = (item.type ?? '').toLowerCase()
 
-      return candidate
-    })
+    // Strictly require it to be a physical tower or mast (man_made=tower/mast)
+    if (category !== 'man_made' || !['tower', 'mast'].includes(type)) {
+      return null
+    }
+
+    const candidate: Transmitter = {
+      id: stringToId(`nominatim:${item.place_id}:${name}:${latitude}:${longitude}`),
+      name,
+      latitude,
+      longitude,
+      relevanceScore: computeNominatimRelevance(item),
+    }
+
+    return candidate
+  })
 
   return mapped.filter((item): item is Transmitter => item !== null)
 }
 
 const PRESET_TRANSMITTERS: Transmitter[] = [
-  // JABODETABEK
-  { id: 900001, name: 'Stasiun Pemancar TVRI Joglo (Jakarta)', latitude: -6.2223, longitude: 106.7324, relevanceScore: 200, sourceType: 'node' },
-  { id: 900002, name: 'Menara Pemancar RCTI Kebon Jeruk (Jakarta)', latitude: -6.1911, longitude: 106.7666, relevanceScore: 190, sourceType: 'node' },
-  { id: 900003, name: 'Menara Pemancar Indosiar Duri Kepa (Jakarta)', latitude: -6.1656, longitude: 106.7781, relevanceScore: 180, sourceType: 'node' },
-  { id: 900004, name: 'Stasiun Transmisi TVRI Senayan (Jakarta)', latitude: -6.2129, longitude: 106.8010, relevanceScore: 170, sourceType: 'node' },
-  // BANDUNG
-  { id: 900005, name: 'Stasiun Pemancar TVRI Panyandakan (Bandung)', latitude: -6.8149, longitude: 107.5599, relevanceScore: 200, sourceType: 'node' },
-  { id: 900006, name: 'Stasiun Transmisi RCTI Bandung', latitude: -6.8132, longitude: 107.5612, relevanceScore: 190, sourceType: 'node' },
-  // YOGYAKARTA & SOLO
-  { id: 900007, name: 'Stasiun Pemancar TVRI Patuk (Yogyakarta)', latitude: -7.8488, longitude: 110.4851, relevanceScore: 200, sourceType: 'node' },
-  { id: 900008, name: 'Stasiun Transmisi RCTI Patuk (Yogyakarta)', latitude: -7.8492, longitude: 110.4862, relevanceScore: 190, sourceType: 'node' },
-  // SEMARANG
-  { id: 900009, name: 'Stasiun Pemancar TVRI Gombel (Semarang)', latitude: -7.0385, longitude: 110.4223, relevanceScore: 200, sourceType: 'node' },
-  { id: 900010, name: 'Stasiun Transmisi RCTI Gombel (Semarang)', latitude: -7.0392, longitude: 110.4241, relevanceScore: 190, sourceType: 'node' },
-  // SURABAYA
-  { id: 900011, name: 'Stasiun Pemancar TVRI Surabaya', latitude: -7.2917, longitude: 112.7161, relevanceScore: 200, sourceType: 'node' },
-  { id: 900012, name: 'Stasiun Transmisi RCTI Surabaya', latitude: -7.2882, longitude: 112.7125, relevanceScore: 190, sourceType: 'node' },
-  // MEDAN
-  { id: 900013, name: 'Stasiun Pemancar TVRI Bandar Baru (Medan)', latitude: 3.2568, longitude: 98.5471, relevanceScore: 200, sourceType: 'node' },
-  // MAKASSAR
-  { id: 900014, name: 'Stasiun Pemancar TVRI Makassar', latitude: -5.1432, longitude: 119.4211, relevanceScore: 200, sourceType: 'node' },
-  // BALI
-  { id: 900015, name: 'Stasiun Pemancar TVRI Bukit Bakung (Jimbaran/Bali)', latitude: -8.8151, longitude: 115.1612, relevanceScore: 200, sourceType: 'node' },
+  // JAKARTA & TANGERANG SELATAN (PUSAT / BARAT)
+  { id: 900001, name: 'Stasiun Pemancar TVRI Joglo (Jakarta Barat)', latitude: -6.2223, longitude: 106.7324, relevanceScore: 200, sourceType: 'node' },
+  { id: 900002, name: 'Menara Pemancar RCTI / MNC Media Kebon Jeruk (Jakarta Barat)', latitude: -6.1911, longitude: 106.7666, relevanceScore: 190, sourceType: 'node' },
+  { id: 900003, name: 'Menara Pemancar Indosiar / Emtek Duri Kepa (Jakarta Barat)', latitude: -6.1656, longitude: 106.7781, relevanceScore: 190, sourceType: 'node' },
+  { id: 900004, name: 'Stasiun Transmisi TVRI Pusat Senayan (Jakarta Selatan)', latitude: -6.2129, longitude: 106.8010, relevanceScore: 180, sourceType: 'node' },
+  { id: 900005, name: 'Menara Pemancar Metro TV / Media Group Kedoya (Jakarta Barat)', latitude: -6.1652, longitude: 106.7588, relevanceScore: 190, sourceType: 'node' },
+  { id: 900006, name: 'Menara Trans TV / Transmedia Tendean (Jakarta Selatan)', latitude: -6.2408, longitude: 106.8315, relevanceScore: 180, sourceType: 'node' },
+  { id: 900007, name: 'Stasiun Pemancar tvOne / Viva Group Pulogadung (Jakarta Timur)', latitude: -6.1887, longitude: 106.9023, relevanceScore: 180, sourceType: 'node' },
+  { id: 900008, name: 'Stasiun Transmisi RTV / Rajawali Cawang (Jakarta Timur)', latitude: -6.2464, longitude: 106.8689, relevanceScore: 170, sourceType: 'node' },
+  { id: 900009, name: 'Stasiun Pemancar Kompas TV Palmerah (Jakarta Pusat)', latitude: -6.2081, longitude: 106.7972, relevanceScore: 170, sourceType: 'node' },
+  { id: 900010, name: 'Stasiun Pemancar NET. TV / MD Entertainment Setiabudi (Jakarta Selatan)', latitude: -6.2098, longitude: 106.8298, relevanceScore: 170, sourceType: 'node' },
+  { id: 900011, name: 'Stasiun Transmisi DAAI TV Pantai Indah Kapuk (Jakarta Utara)', latitude: -6.1118, longitude: 106.7385, relevanceScore: 160, sourceType: 'node' },
+
+  // BOGOR (GUNUNG GEULIS & SEKITARNYA)
+  { id: 900020, name: 'Stasiun Pemancar TVRI MUX Gunung Geulis (Bogor)', latitude: -6.6192, longitude: 106.8831, relevanceScore: 200, sourceType: 'node' },
+  { id: 900021, name: 'Stasiun Transmisi RCTI / MNC Gunung Geulis (Bogor)', latitude: -6.6195, longitude: 106.8845, relevanceScore: 190, sourceType: 'node' },
+  { id: 900022, name: 'Stasiun Transmisi SCTV / Emtek Gunung Geulis (Bogor)', latitude: -6.6201, longitude: 106.8850, relevanceScore: 190, sourceType: 'node' },
+  { id: 900023, name: 'Stasiun Transmisi Metro TV Gunung Geulis (Bogor)', latitude: -6.6185, longitude: 106.8820, relevanceScore: 180, sourceType: 'node' },
+  { id: 900024, name: 'Stasiun Transmisi tvOne / Viva Gunung Bunder (Bogor)', latitude: -6.6781, longitude: 106.6892, relevanceScore: 180, sourceType: 'node' },
+  { id: 900025, name: 'Stasiun Pemancar TVRI Gunung Salak / Cimelati (Bogor)', latitude: -6.7125, longitude: 106.7918, relevanceScore: 180, sourceType: 'node' },
+
+  // TANGERANG & BANTEN UTARA (LEBAK/TANGERANG)
+  { id: 900030, name: 'Stasiun Transmisi TVRI Tangerang Kota', latitude: -6.2167, longitude: 106.6333, relevanceScore: 190, sourceType: 'node' },
+  { id: 900031, name: 'Stasiun Pemancar TVRI MUX Serpong (Tangerang Selatan)', latitude: -6.3021, longitude: 106.6714, relevanceScore: 180, sourceType: 'node' },
+  { id: 900032, name: 'Stasiun Transmisi MUX Metro TV Pasir Kemis (Tangerang)', latitude: -6.1689, longitude: 106.5412, relevanceScore: 170, sourceType: 'node' },
+  { id: 900033, name: 'Stasiun Pemancar TVRI Banten / MUX Gunung Karang (Pandeglang/Serang)', latitude: -6.3042, longitude: 106.0511, relevanceScore: 180, sourceType: 'node' },
+
+  // BEKASI & DEPOK
+  { id: 900040, name: 'Stasiun Pemancar MUX TVRI Tambun (Bekasi)', latitude: -6.2625, longitude: 107.0611, relevanceScore: 180, sourceType: 'node' },
+  { id: 900041, name: 'Stasiun Transmisi Relay TVRI Sawangan (Depok)', latitude: -6.3982, longitude: 106.7725, relevanceScore: 170, sourceType: 'node' },
+  { id: 900042, name: 'Stasiun Relay Pemancar Cikarang (Bekasi Timur)', latitude: -6.3051, longitude: 107.1528, relevanceScore: 160, sourceType: 'node' },
 ]
 
 function getPresetCandidates(userLocation: UserLocation, maxDistanceKm = 60): Transmitter[] {
@@ -404,6 +420,11 @@ export async function searchNearbyTransmitters(userLocation: UserLocation): Prom
     const tags = element.tags ?? {}
     const mapName = getMapName(tags)
     if (!mapName) {
+      return null
+    }
+
+    // Exclude known corporate office towers or non-transmitters
+    if (/mnc tower|menara mnc|mnc center|mnc plaza|mnc studios|sctv tower|trans tv tendean|menara kominfo|kominfo cibinong/i.test(mapName)) {
       return null
     }
 

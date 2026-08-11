@@ -5,6 +5,8 @@ export interface Transmitter {
   longitude: number
   relevanceScore?: number
   sourceType?: 'node' | 'way' | 'relation'
+  aiScore?: number
+  aiRecommendation?: string
 }
 
 export interface UserLocation {
