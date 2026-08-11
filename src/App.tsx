@@ -389,33 +389,44 @@ function App() {
     [rankedTransmitters, activeTarget],
   )
 
-  // Listen to orientation events
+  // Listen to orientation events (supporting Android absolute API & iOS standard API)
   useEffect(() => {
     if (viewState !== 'compass' || compassStatus !== 'available') {
       return
     }
 
-    const handleOrientation = (event: DeviceOrientationEvent) => {
-      const orientationWithCompass = event as DeviceOrientationEvent & {
-        webkitCompassHeading?: number
+    const handleOrientation = (event: any) => {
+      // iOS has webkitCompassHeading which is pre-calibrated, absolute, and clockwise
+      if (typeof event.webkitCompassHeading === 'number') {
+        setHeading(event.webkitCompassHeading)
+        return
       }
 
-      const nextHeading =
-        typeof orientationWithCompass.webkitCompassHeading === 'number'
-          ? orientationWithCompass.webkitCompassHeading
-          : typeof event.alpha === 'number'
-            ? event.alpha
-            : null
-
-      if (nextHeading !== null) {
-        setHeading(nextHeading)
+      // Android/Chrome sends absolute values (0 to 360) in counter-clockwise direction.
+      // We convert it to clockwise compass heading using (360 - alpha) % 360.
+      if (typeof event.alpha === 'number') {
+        const alpha = event.alpha
+        const clockwiseHeading = (360 - alpha) % 360
+        setHeading(clockwiseHeading)
       }
     }
 
-    window.addEventListener('deviceorientation', handleOrientation as EventListener, true)
+    // Android Chrome requires 'deviceorientationabsolute' for true absolute compass orientation.
+    // iOS Safari uses 'deviceorientation' with webkitCompassHeading.
+    const useAbsolute = 'ondeviceorientationabsolute' in window
+
+    if (useAbsolute) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true)
+    } else {
+      window.addEventListener('deviceorientation', handleOrientation, true)
+    }
 
     return () => {
-      window.removeEventListener('deviceorientation', handleOrientation as EventListener, true)
+      if (useAbsolute) {
+        window.removeEventListener('deviceorientationabsolute', handleOrientation, true)
+      } else {
+        window.removeEventListener('deviceorientation', handleOrientation, true)
+      }
     }
   }, [compassStatus, viewState])
 
