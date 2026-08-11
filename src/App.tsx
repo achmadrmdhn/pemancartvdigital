@@ -173,7 +173,7 @@ function App() {
             : null
 
       if (nextHeading !== null) {
-        setHeading((360 - nextHeading + 360) % 360)
+        setHeading(nextHeading)
       }
     }
 
@@ -403,14 +403,14 @@ function App() {
             {isAligned && <div className="aligned-badge">ANTENA SANGAT PRESISI</div>}
 
             <div className="compass-stage">
-              <div className="compass-ring">
+              <div className="compass-ring" />
+
+              <div className="compass-rose" style={{ transform: `rotate(${compassRoseRotation}deg)` }}>
                 <span className="north">N</span>
                 <span className="east">E</span>
                 <span className="south">S</span>
                 <span className="west">W</span>
-              </div>
 
-              <div className="compass-rose" style={{ transform: `rotate(${compassRoseRotation}deg)` }}>
                 <div className="target-pointer" style={{ transform: `rotate(${bearing}deg)` }}>
                   <div className="target-head">📺</div>
                   <div className="target-line" />

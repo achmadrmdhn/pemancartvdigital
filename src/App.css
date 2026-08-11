@@ -487,32 +487,32 @@
   border: 2px solid rgba(148, 163, 184, 0.4);
 }
 
-.compass-ring span {
+.compass-rose span {
   position: absolute;
   font-weight: 700;
   font-size: 0.82rem;
 }
 
-.compass-ring .north {
+.compass-rose .north {
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
   color: #f43f5e;
 }
 
-.compass-ring .east {
+.compass-rose .east {
   top: 50%;
   right: 10px;
   transform: translateY(-50%);
 }
 
-.compass-ring .south {
+.compass-rose .south {
   bottom: 10px;
   left: 50%;
   transform: translateX(-50%);
 }
 
-.compass-ring .west {
+.compass-rose .west {
   top: 50%;
   left: 10px;
   transform: translateY(-50%);
